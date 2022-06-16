@@ -3,6 +3,8 @@
 
 #include "TerrainSection.h"
 #include "LandscapeGenerator.h"
+#include "DiskSampler.h"
+
 
 int CalcIndexFromGridPos(const FIntPoint& gridSize, int x, int y)
 {
@@ -34,20 +36,16 @@ bool UTerrainSection::IsOriginCoord(const FVector& PlayerLocation)
 	return mLandscapeGen->GetCurrentGridPoint(PlayerLocation) == mTerrainCoords;
 }
 
-void UTerrainSection::InitialiseSection(ALandscapeGenerator* LandscapeGen , int SectionGridIndex, FIntPoint TerrainCoords, uint32 Seed)
+void UTerrainSection::InitialiseSection(ALandscapeGenerator* LandscapeGen , int SectionGridIndex, FIntPoint TerrainCoords, uint32 Seed, const FVector2D& SectionSize, const FIntPoint& ComponentsPerAxis, float fNoiseScale, float fHeightScale, float fLacunarity, float fPersistance, int Octaves)
 {
-	USimplexNoiseBPLibrary::setNoiseSeed(Seed);
+	
 	mLandscapeGen = LandscapeGen;
 	mSectionIndex = SectionGridIndex;
 	mTerrainCoords = TerrainCoords;
-}
 
-void UTerrainSection::GenerateSectionMeshData(const FVector2D& SectionSize, const FIntPoint& ComponentsPerAxis, float fNoiseScale, float fHeightScale, float fLacunarity, float fPersistance, int Octaves)
-{
-	if (!mLandscapeGen)
-		return;
+	bMeshGenerated = false;
+	LODLevel = 0;
 
-	
 	mSectionSize = SectionSize;
 	mComponentsPerAxis = ComponentsPerAxis;
 	mHeightScale = fHeightScale;
@@ -56,13 +54,22 @@ void UTerrainSection::GenerateSectionMeshData(const FVector2D& SectionSize, cons
 	mPersistance = fPersistance;
 	mOctaves = Octaves;
 
+	GenerateSectionMeshData();
+}
+
+void UTerrainSection::GenerateSectionMeshData()
+{
+	if (!mLandscapeGen)
+		return;
+	
 	FVector MeshOrigin = FVector(CalculateWorldCoordinatesFromTerrainCoords(mTerrainCoords, mSectionSize), 0.0);
 	mMeshOrigin = MeshOrigin;
-	float rowVertDist = mSectionSize.Y / (int)ComponentsPerAxis.Y;
-	float columnVertDist = mSectionSize.X / (int)ComponentsPerAxis.X;
+	float rowVertDist = mSectionSize.Y / mComponentsPerAxis.Y;
+	float columnVertDist = mSectionSize.X / mComponentsPerAxis.X;
 
-	FIntPoint OverallComponents = ComponentsPerAxis + FIntPoint(1, 1);
+	FIntPoint OverallComponents = mComponentsPerAxis + FIntPoint(1, 1);
 
+	//Generate Vertices
 	for (int j = 0; j < OverallComponents.Y; j++)
 	{
 		float yPos = rowVertDist * j;
@@ -70,13 +77,8 @@ void UTerrainSection::GenerateSectionMeshData(const FVector2D& SectionSize, cons
 		{
 			//Generate vertex
 			float xPos = columnVertDist * i;
-			//FVector vertPosition(xPos, yPos, 0);
-			//vertPosition += MeshOrigin;
-
-			//Generate Noise value
-			//float RawNoiseValue = USimplexNoiseBPLibrary::GetSimplexNoise2D_EX( vertPosition.X * fNoiseScale, vertPosition.Y * fNoiseScale, fLacunarity, fPersistance, Octaves, 1.0f, true);
-			//vertPosition += FVector(0, 0, mLandscapeGen->ApplyTerrainHeightMultiplier(RawNoiseValue) * fHeightScale);
 			mSectionVertices.Add(CalculateVertexPosition(xPos, yPos));
+
 			if ((i < OverallComponents.X - 1) && (j < OverallComponents.Y - 1))
 			{
 				//Generate Triangle Index
@@ -98,6 +100,7 @@ void UTerrainSection::GenerateSectionMeshData(const FVector2D& SectionSize, cons
 		}
 	}
 
+	//Use custom method to generate normals to fix seams.
 	mSectionNormals.SetNumZeroed(mSectionVertices.Num());
 	for (int j = -1; j < OverallComponents.Y; j++)
 	{
@@ -243,6 +246,9 @@ bool UTerrainSection::GenerateLODData(int LOD)
 		}
 	}
 
+	Points = NewObject<UDiskSampler>(GetTransientPackage(), UDiskSampler::StaticClass());
+	Points->GeneratePoints(mSectionSize.X, mSectionSize.Y, 35000, 30);
+
 	return true;
 }
 
@@ -282,14 +288,31 @@ void UTerrainSection::RemoveSection()
 		mLandscapeGen->mesh->ClearMeshSection(mSectionIndex);
 
 	mLandscapeGen = nullptr;
+	if (Points)
+	{
+		Points->ConditionalBeginDestroy();
+		Points = nullptr;
+	}
 }
 
-UTerrainSection::UTerrainSection()
+FGeneratorThread::FGeneratorThread()
 {
-	mLandscapeGen = nullptr;
-	bMeshGenerated = false;
-	mSectionIndex = 0;
-	LODLevel = 0;
 }
 
+FGeneratorThread::~FGeneratorThread()
+{
+}
 
+bool FGeneratorThread::Init()
+{
+	return false;
+}
+
+uint32 FGeneratorThread::Run()
+{
+	return uint32();
+}
+
+void FGeneratorThread::Stop()
+{
+}

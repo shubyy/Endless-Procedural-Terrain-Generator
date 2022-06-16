@@ -101,8 +101,7 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 				UTerrainSection* NewSection = NewObject<UTerrainSection>(GetTransientPackage(), UTerrainSection::StaticClass());
 				SectionObjects.Add(NewSection);
 
-				NewSection->InitialiseSection(this, SectionIndex, Coord, NoiseSeed);
-				NewSection->GenerateSectionMeshData(LandscapeSectionSize, LandscapeComponentSize, fNoiseScale, fHeightScale, fLacunarity, fPersistance, Octaves);
+				NewSection->InitialiseSection(this, SectionIndex, Coord, NoiseSeed, LandscapeSectionSize, LandscapeComponentSize, fNoiseScale, fHeightScale, fLacunarity, fPersistance, Octaves);
 				NewSection->UseLODLevel(LODLevel);
 				NewSection->UpdateTerrainSection();
 
