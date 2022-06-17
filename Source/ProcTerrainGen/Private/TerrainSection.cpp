@@ -1,6 +1,5 @@
 	// Fill out your copyright notice in the Description page of Project Settings.
 
-
 #include "TerrainSection.h"
 #include "LandscapeGenerator.h"
 #include "DiskSampler.h"
@@ -38,13 +37,13 @@ bool UTerrainSection::IsOriginCoord(const FVector& PlayerLocation)
 
 void UTerrainSection::InitialiseSection(ALandscapeGenerator* LandscapeGen , int SectionGridIndex, FIntPoint TerrainCoords, uint32 Seed, const FVector2D& SectionSize, const FIntPoint& ComponentsPerAxis, float fNoiseScale, float fHeightScale, float fLacunarity, float fPersistance, int Octaves)
 {
-	
 	mLandscapeGen = LandscapeGen;
 	mSectionIndex = SectionGridIndex;
 	mTerrainCoords = TerrainCoords;
 
 	bMeshGenerated = false;
-	LODLevel = 0;
+	LODLevel = -1;
+	GenLOD = -1;
 
 	mSectionSize = SectionSize;
 	mComponentsPerAxis = ComponentsPerAxis;
@@ -54,14 +53,12 @@ void UTerrainSection::InitialiseSection(ALandscapeGenerator* LandscapeGen , int 
 	mPersistance = fPersistance;
 	mOctaves = Octaves;
 
-	GenerateSectionMeshData();
+	Thread = new FGeneratorThread(this);
+	Thread->StartOperation(THREAD_OPERATION::GEN_LANDSCAPE);
 }
 
 void UTerrainSection::GenerateSectionMeshData()
 {
-	if (!mLandscapeGen)
-		return;
-	
 	FVector MeshOrigin = FVector(CalculateWorldCoordinatesFromTerrainCoords(mTerrainCoords, mSectionSize), 0.0);
 	mMeshOrigin = MeshOrigin;
 	float rowVertDist = mSectionSize.Y / mComponentsPerAxis.Y;
@@ -151,7 +148,7 @@ void UTerrainSection::GenerateSectionMeshData()
 					mSectionNormals[index13] += normal1;
 					mSectionNormals[index13] += normal2;
 				}
-				else if(j == OverallComponents.Y - 1)
+				else if (j == OverallComponents.Y - 1)
 					mSectionNormals[index23] += normal2;
 				else
 				{
@@ -173,7 +170,7 @@ void UTerrainSection::GenerateSectionMeshData()
 			{
 				mSectionNormals[index11] += normal1;
 				mSectionNormals[index11] += normal2;
-				if(j != OverallComponents.Y - 1)
+				if (j != OverallComponents.Y - 1)
 					mSectionNormals[index12] += normal1;
 			}
 			else if (j == OverallComponents.Y - 1)
@@ -194,19 +191,24 @@ void UTerrainSection::GenerateSectionMeshData()
 				mSectionNormals[index13] += normal2;
 				mSectionNormals[index23] += normal2;
 			}
-			
+
 		}
 	}
-	
+
 	//Normalize normals
 	for (int i = 0; i < mSectionNormals.Num(); i += 1)
 		mSectionNormals[i].Normalize();
+
+	Points = NewObject<UDiskSampler>(GetTransientPackage(), UDiskSampler::StaticClass());
+	Points->GeneratePoints(mSectionSize.X, mSectionSize.Y, 500, 15);
 
 	bMeshGenerated = true;
 }
 
 bool UTerrainSection::GenerateLODData(int LOD)
 {
+	GeneratingLOD = true;
+
 	if (!bMeshGenerated)
 		return false;
 
@@ -246,39 +248,40 @@ bool UTerrainSection::GenerateLODData(int LOD)
 		}
 	}
 
-	Points = NewObject<UDiskSampler>(GetTransientPackage(), UDiskSampler::StaticClass());
-	Points->GeneratePoints(mSectionSize.X, mSectionSize.Y, 35000, 30);
-
+	GeneratingLOD = false;
 	return true;
 }
 
-void UTerrainSection::UseLODLevel(int LOD)
+void UTerrainSection::UpdateTerrainSection(int LOD)
 {
-	if (LOD > 4)
-		return;
-
-	if (LODLevel == LOD)
-		return;
-
-	if (LOD > 0)
-		GenerateLODData(LOD);
-
-	LODLevel = LOD;
-}
-
-void UTerrainSection::UpdateTerrainSection()
-{
-	if (mLandscapeGen->mesh)
+	if (mLandscapeGen->mesh && bMeshGenerated)
 	{
-		if(LODLevel > 0)
-			mLandscapeGen->mesh->CreateMeshSection_LinearColor(mSectionIndex, mSectionLODVertices, mSectionLODIndices, mSectionLODNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), false);
-		else	
-			mLandscapeGen->mesh->CreateMeshSection_LinearColor(mSectionIndex, mSectionVertices, mSectionIndices, mSectionNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), true);
+		if (LOD > 4)
+			return;
 
+		if (LODLevel == LOD)
+			return;
+
+		if (LOD > 0 && GenLOD != LOD)
+		{
+			GenLOD = LOD;
+			GeneratingLOD = true;
+			Thread->StartOperation(GEN_LOD);
+			return;
+		}
+			
+		if (GeneratingLOD == false)
+		{
+			LODLevel = LOD;
+			if (LODLevel > 0)
+				mLandscapeGen->mesh->CreateMeshSection_LinearColor(mSectionIndex, mSectionLODVertices, mSectionLODIndices, mSectionLODNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), false);
+			else
+				mLandscapeGen->mesh->CreateMeshSection_LinearColor(mSectionIndex, mSectionVertices, mSectionIndices, mSectionNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), true);
+		}
+		
 		if (mLandscapeGen->GetMaterial())
 			mLandscapeGen->mesh->SetMaterial(mSectionIndex, mLandscapeGen->GetMaterial());
 
-		mLandscapeGen->mesh->ContainsPhysicsTriMeshData(false);
 	}
 }
 
@@ -293,26 +296,64 @@ void UTerrainSection::RemoveSection()
 		Points->ConditionalBeginDestroy();
 		Points = nullptr;
 	}
+
+	if (Thread)
+	{
+		delete Thread;
+		Thread = nullptr;
+	}
 }
 
-FGeneratorThread::FGeneratorThread()
+/*******************************************
+MultiThreader
+*******************************************/
+
+FGeneratorThread::FGeneratorThread(UTerrainSection* Section)
 {
+	Thread = nullptr;
+	bRunThread = true;
+	mSection = Section;
+	mOperation = GEN_LANDSCAPE;
+}
+
+bool FGeneratorThread::StartOperation(THREAD_OPERATION operation)
+{
+	mOperation = operation;
+	
+	Thread = FRunnableThread::Create(this, TEXT("GeneratorThread"));
+	return true;
 }
 
 FGeneratorThread::~FGeneratorThread()
 {
+	if (Thread)
+	{
+		Thread->Kill();
+		delete Thread;
+	}
 }
 
 bool FGeneratorThread::Init()
 {
-	return false;
+	return true;
 }
 
 uint32 FGeneratorThread::Run()
 {
-	return uint32();
+	switch (mOperation)
+	{
+		case GEN_LANDSCAPE:
+			mSection->GenerateSectionMeshData();
+			break;
+		case GEN_LOD:
+			mSection->GenerateLODData(mSection->GenLOD);
+			break;
+	}
+	
+	return 1;
 }
 
 void FGeneratorThread::Stop()
 {
+	bRunThread = false;
 }

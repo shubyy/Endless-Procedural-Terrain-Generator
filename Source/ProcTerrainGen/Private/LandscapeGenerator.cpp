@@ -79,7 +79,7 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 				{
 					//Remove designated section
 					FString debugtxt = FText::Format(LOCTEXT("Rem", "Removing terrain coord ({0},{1})"), SectionsToRemove->mTerrainCoords.X, SectionsToRemove->mTerrainCoords.Y).ToString();
-					GEngine->AddOnScreenDebugMessage(-1, 200.0f, FColor::Green, debugtxt);
+					GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, debugtxt);
 					SectionsToRemove->RemoveSection();
 					FreeSectionIndex(SectionsToRemove->mSectionIndex);
 					SectionObjects.RemoveSingleSwap(SectionsToRemove);
@@ -93,7 +93,7 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 			{
 				//Create terrain object
 				FString debugtxt = FText::Format(LOCTEXT("Gen", "Generating terrain coord ({0},{1})"), Coord.X, Coord.Y).ToString();
-				GEngine->AddOnScreenDebugMessage(-1, 200.0f, FColor::Green, debugtxt);
+				GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, debugtxt);
 
 				//Calc LOD Level;
 				int LODLevel = CalcLODLevelFromTerrainCoordDistance((Coord - CurrentGridCoord).Size());
@@ -102,8 +102,7 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 				SectionObjects.Add(NewSection);
 
 				NewSection->InitialiseSection(this, SectionIndex, Coord, NoiseSeed, LandscapeSectionSize, LandscapeComponentSize, fNoiseScale, fHeightScale, fLacunarity, fPersistance, Octaves);
-				NewSection->UseLODLevel(LODLevel);
-				NewSection->UpdateTerrainSection();
+				NewSection->UpdateTerrainSection(0);
 
 				Generated = true;
 				mGenerating = true;
@@ -118,11 +117,7 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 			
 			//Only update if LOD has changed
 			if (Section->LODLevel != LODLevel)
-			{
-				Section->UseLODLevel(LODLevel);
-				Section->UpdateTerrainSection();
-			}
-				
+				Section->UpdateTerrainSection(LODLevel);	
 		}
 	}
 
@@ -201,7 +196,7 @@ ALandscapeGenerator::ALandscapeGenerator()
 	PrimaryActorTick.bCanEverTick = true;
 	//bAllowTickBeforeBeginPlay = false;
 	//PrimaryActorTick.TickInterval = 0.5f;
-	SetActorTickInterval(0.35f);
+	SetActorTickInterval( 0.5f);
 
 	mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("LandscapeMesh"));
 	RootComponent = mesh;
