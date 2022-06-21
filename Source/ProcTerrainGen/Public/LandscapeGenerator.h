@@ -4,9 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "ProceduralMeshComponent.h"
-#include "TerrainSection.h"
 #include "LandscapeGenerator.generated.h"
+
+FVector2D CalculateWorldCoordinatesFromTerrainCoords(const FIntPoint& TerrainCoords, const FVector2D& SectionSize);
+
+class ALandscapeSection;
+class AActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FGeneratedDelegate);
 
@@ -17,17 +20,14 @@ class PROCTERRAINGEN_API ALandscapeGenerator : public AActor
 
 	FIntPoint CalcVisibleGridPoints(const FVector& PlayerLocation);
 	void GenerateNewTerrainGrid();
-	UTerrainSection* DoesTerrainCoordExist(const FIntPoint& TerrainCoord);
+	ALandscapeSection* DoesTerrainCoordExist(const FIntPoint& TerrainCoord);
 	bool IsTerrainCoordVisible(const FIntPoint& Coord);
-	int FindAndReserveFreeSectionIndex();
 	bool IsCloseForCollision(const FIntPoint& Coords, const FVector& PlayerLocation);
-	void FreeSectionIndex(int index);
 	int CalcLODLevelFromTerrainCoordDistance(float Distance);
 
 	TArray<FVector> LandscapeVertices;
 	TArray<int32> LandscapeIndices;
 	TArray<FVector> LandscapeNormals;
-	TArray<bool> ReservedSections;
 	TArray<FIntPoint> VisibleGridCoords;
 	
 	int NoiseSeed;
@@ -43,8 +43,14 @@ public:
 	//Get landscape material
 	UMaterialInterface* GetMaterial();
 
-	UPROPERTY(VisibleAnywhere)
-	UProceduralMeshComponent* mesh = nullptr;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landscape Properties")
+	bool AddFoliage;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landscape Properties")
+	bool AddCollision;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landscape Properties")
+	UStaticMesh* TreeMesh;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landscape Properties")
 	FVector2D LandscapeSectionSize;
@@ -83,7 +89,7 @@ public:
 	UCurveFloat *TerrainHeight;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landscape Data")
-	TArray<UTerrainSection*> SectionObjects;
+	TArray<ALandscapeSection*> SectionObjects;
 
 	UPROPERTY(BlueprintAssignable, Category = "Landscape Functions")
 	FGeneratedDelegate OnGenerated;
@@ -94,8 +100,6 @@ public:
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
-	
-	virtual void PostActorCreated() override;
 
 public:	
 	// Called every frame

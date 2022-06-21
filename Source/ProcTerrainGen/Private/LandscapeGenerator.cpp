@@ -2,9 +2,18 @@
 
 
 #include "LandscapeGenerator.h"
-#include "KismetProceduralMeshLibrary.h"
+#include "LandscapeSection.h"
 
 #define LOCTEXT_NAMESPACE "Terrain"
+
+FVector2D CalculateWorldCoordinatesFromTerrainCoords(const FIntPoint& TerrainCoords, const FVector2D& SectionSize)
+{
+	FVector2D WorldCoords;
+	WorldCoords.X = TerrainCoords.X * SectionSize.X;
+	WorldCoords.Y = TerrainCoords.Y * SectionSize.Y;
+
+	return WorldCoords;
+}
 
 float ALandscapeGenerator::ApplyTerrainHeightMultiplier(float value)
 {
@@ -55,8 +64,8 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 	FIntPoint CurrentGridCoord = CalcVisibleGridPoints(PlayerLocation);
 
 	//Find removable section
-	UTerrainSection* SectionsToRemove = nullptr;
-	for (UTerrainSection* SectionObject : SectionObjects)
+	ALandscapeSection* SectionsToRemove = nullptr;
+	for (ALandscapeSection* SectionObject : SectionObjects)
 	{
 		if (!IsTerrainCoordVisible(SectionObject->mTerrainCoords))
 		{
@@ -68,47 +77,42 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 	//For each coord
 	for (auto Coord : VisibleGridCoords)
 	{
-		UTerrainSection* Section = DoesTerrainCoordExist(Coord);
+		ALandscapeSection* Section = DoesTerrainCoordExist(Coord);
 		if (!Section)
 		{
 			//Find Free section
-			int SectionIndex = FindAndReserveFreeSectionIndex();
-			if (SectionIndex < 0)
+			if (SectionsToRemove)
 			{
-				if (SectionsToRemove)
-				{
-					//Remove designated section
-					FString debugtxt = FText::Format(LOCTEXT("Rem", "Removing terrain coord ({0},{1})"), SectionsToRemove->mTerrainCoords.X, SectionsToRemove->mTerrainCoords.Y).ToString();
-					GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, debugtxt);
-					SectionsToRemove->RemoveSection();
-					FreeSectionIndex(SectionsToRemove->mSectionIndex);
-					SectionObjects.RemoveSingleSwap(SectionsToRemove);
-					SectionsToRemove = nullptr;
+				//Remove designated section
+				//FString debugtxt = FText::Format(LOCTEXT("Rem", "Removing terrain coord ({0},{1})"), SectionsToRemove->mTerrainCoords.X, SectionsToRemove->mTerrainCoords.Y).ToString();
+				//GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, debugtxt);
+				SectionsToRemove->RemoveSection();
 
-					SectionIndex = FindAndReserveFreeSectionIndex();
-				}
+				SectionObjects.RemoveSingleSwap(SectionsToRemove);
+				SectionsToRemove->Destroy();
+				SectionsToRemove = nullptr;
 			}
+			
+			mGenerating = true;
+			//Create terrain object
+			//FString debugtxt = FText::Format(LOCTEXT("Gen", "Generating terrain coord ({0},{1})"), Coord.X, Coord.Y).ToString();
+			//GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, debugtxt);
 
-			if (SectionIndex >= 0)
-			{
-				//Create terrain object
-				FString debugtxt = FText::Format(LOCTEXT("Gen", "Generating terrain coord ({0},{1})"), Coord.X, Coord.Y).ToString();
-				GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Green, debugtxt);
+			//Calc LOD Level;
+			int LODLevel = CalcLODLevelFromTerrainCoordDistance((Coord - CurrentGridCoord).Size());
 
-				//Calc LOD Level;
-				int LODLevel = CalcLODLevelFromTerrainCoordDistance((Coord - CurrentGridCoord).Size());
+			//Spawn Actor
+			FVector Pos = FVector(CalculateWorldCoordinatesFromTerrainCoords(Coord, LandscapeSectionSize), 0);
+			FActorSpawnParameters Params;
+			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			ALandscapeSection* NewSection = GetWorld()->SpawnActor<ALandscapeSection>(ALandscapeSection::StaticClass(), FVector(0,0,0), FRotator::ZeroRotator, Params);
+			
+			SectionObjects.Add(NewSection);
+			NewSection->InitialiseSection(this, Coord, NoiseSeed, LandscapeSectionSize, LandscapeComponentSize, fNoiseScale, fHeightScale, fLacunarity, fPersistance, Octaves);
+			NewSection->UpdateTerrainSection(0);
 
-				UTerrainSection* NewSection = NewObject<UTerrainSection>(GetTransientPackage(), UTerrainSection::StaticClass());
-				SectionObjects.Add(NewSection);
-
-				NewSection->InitialiseSection(this, SectionIndex, Coord, NoiseSeed, LandscapeSectionSize, LandscapeComponentSize, fNoiseScale, fHeightScale, fLacunarity, fPersistance, Octaves);
-				NewSection->UpdateTerrainSection(0);
-
-				Generated = true;
-				mGenerating = true;
-
-				break;
-			}
+			Generated = true;
+			break;
 		}
 		else
 		{
@@ -131,9 +135,9 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 	}
 }
 
-UTerrainSection* ALandscapeGenerator::DoesTerrainCoordExist(const FIntPoint& TerrainCoord)
+ALandscapeSection* ALandscapeGenerator::DoesTerrainCoordExist(const FIntPoint& TerrainCoord)
 {
-	for (UTerrainSection* SectionObject : SectionObjects)
+	for (ALandscapeSection* SectionObject : SectionObjects)
 		if (SectionObject->mTerrainCoords == TerrainCoord)
 			return SectionObject;
 
@@ -155,19 +159,6 @@ bool ALandscapeGenerator::IsTerrainCoordVisible(const FIntPoint& Coord)
 	return found;
 }
 
-int ALandscapeGenerator::FindAndReserveFreeSectionIndex()
-{
-	for (int i = 0; i < ReservedSections.Num(); i++)
-	{
-		if (!ReservedSections[i])
-		{
-			ReservedSections[i] = true;
-			return i;
-		}
-	}
-	return -1;
-}
-
 bool ALandscapeGenerator::IsCloseForCollision(const FIntPoint& Coords, const FVector& PlayerLocation)
 {
 	FVector2D WorldCenterCoord = CalculateWorldCoordinatesFromTerrainCoords(Coords, LandscapeSectionSize) + (LandscapeSectionSize / 2.0f);
@@ -177,14 +168,9 @@ bool ALandscapeGenerator::IsCloseForCollision(const FIntPoint& Coords, const FVe
 	return dist < MaxDist;
 }
 
-void ALandscapeGenerator::FreeSectionIndex(int index)
-{
-	ReservedSections[index] = false;
-}
-
 inline int ALandscapeGenerator::CalcLODLevelFromTerrainCoordDistance(float Distance)
 {
-	return FMath::Floor(Distance / 2.0f);
+	return FMath::Floor(Distance / 1.5f);
 }
 
 // Sets default values
@@ -198,10 +184,6 @@ ALandscapeGenerator::ALandscapeGenerator()
 	//PrimaryActorTick.TickInterval = 0.5f;
 	SetActorTickInterval( 0.5f);
 
-	mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("LandscapeMesh"));
-	RootComponent = mesh;
-	mesh->bUseAsyncCooking = true;
-	mesh->SetMobility(EComponentMobility::Static);
 	GenerationLevel = 1;
 	
 	LandscapeSectionSize = FVector2D(45000.0, 45000.0);
@@ -216,6 +198,13 @@ ALandscapeGenerator::ALandscapeGenerator()
 	fPersistance = 0.6f;
 	Octaves = 4;
 
+	AddFoliage = true;
+	AddCollision = true;
+
+	const ConstructorHelpers::FObjectFinder<UStaticMesh> MeshObj(TEXT("StaticMesh'/Game/Meshes/Sphere.Sphere'"));
+	if(MeshObj.Succeeded())
+		TreeMesh = MeshObj.Object;
+
 	mGenerating = false;
 	bCanGenerate = false;
 }
@@ -225,11 +214,6 @@ UMaterialInterface* ALandscapeGenerator::GetMaterial()
 	return LandscapeMat;
 }
 
-void ALandscapeGenerator::PostActorCreated()
-{
-	Super::PostActorCreated();
-	
-}
 
 void ALandscapeGenerator::StartGeneration()
 {
@@ -239,11 +223,6 @@ void ALandscapeGenerator::StartGeneration()
 // Called when the game starts or when spawned
 void ALandscapeGenerator::BeginPlay()
 {
-	for (int i = 0; i < MaxSectionCount; i++)
-	{
-		ReservedSections.Add(false);
-	}
-
 	Super::BeginPlay();
 }
 

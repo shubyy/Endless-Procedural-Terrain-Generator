@@ -1,25 +1,49 @@
-	// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
-#include "TerrainSection.h"
+
+#include "LandscapeSection.h"
 #include "LandscapeGenerator.h"
+#include "SimplexNoise/Public/SimplexNoiseBPLibrary.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "KismetProceduralMeshLibrary.h"
 #include "DiskSampler.h"
 
+#define LOCTEXT_NAMESPACE "Section"
+
+
+// Sets default values
+ALandscapeSection::ALandscapeSection()
+{
+ 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+	PrimaryActorTick.bCanEverTick = false;
+	FoliageGenerated = false;
+	bMeshGenerated = false;
+	PointsGenerated = false;
+	Points = nullptr;
+
+	mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("LandscapeMesh"));
+	RootComponent = mesh;
+	mesh->SetMobility(EComponentMobility::Static);
+	mesh->bUseAsyncCooking = false;
+
+	InstMesh = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("HierarchicalInstancedStaticMeshComponent"));
+	InstMesh->SetCollisionProfileName("BlockAllDynamic");
+	InstMesh->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepWorldTransform);
+}
+
+// Called when the game starts or when spawned
+void ALandscapeSection::BeginPlay()
+{
+	Super::BeginPlay();
+	
+}
 
 int CalcIndexFromGridPos(const FIntPoint& gridSize, int x, int y)
 {
 	return x + y * gridSize.X;
 }
 
-FVector2D CalculateWorldCoordinatesFromTerrainCoords(const FIntPoint& TerrainCoords, const FVector2D& SectionSize)
-{
-	FVector2D WorldCoords;
-	WorldCoords.X = TerrainCoords.X * SectionSize.X;
-	WorldCoords.Y = TerrainCoords.Y * SectionSize.Y;
-
-	return WorldCoords;
-}
-
-FVector UTerrainSection::CalculateVertexPosition(float xPos, float yPos)
+FVector ALandscapeSection::CalculateVertexPosition(float xPos, float yPos)
 {
 	FVector vertPosition(xPos, yPos, 0);
 	vertPosition += mMeshOrigin;
@@ -30,15 +54,54 @@ FVector UTerrainSection::CalculateVertexPosition(float xPos, float yPos)
 	return vertPosition;
 }
 
-bool UTerrainSection::IsOriginCoord(const FVector& PlayerLocation)
+void ALandscapeSection::GenerateFoliage()
+{
+
+	if (!bMeshGenerated || !PointsGenerated)
+		return;
+
+	FoliageGenerated = true;
+	if (!mLandscapeGen->AddFoliage)
+		return;
+	
+	FCollisionQueryParams Params;
+	Params.bTraceComplex = true;
+	Params.AddIgnoredComponent(InstMesh);
+	FHitResult Res;
+	
+	for (FVector2D Point : Points->PointList)
+	{
+		FVector Start = FVector(Point, mHeightScale + 3000.0f) + mMeshOrigin;
+		FVector End = FVector(Point, -3000) + mMeshOrigin;
+		
+		bool bHit = GetWorld()->LineTraceSingleByChannel(Res, Start, End, ECollisionChannel::ECC_Visibility, Params);
+		if (bHit)
+		{
+			if (Res.ImpactPoint.Z < 6000)
+			{
+				FTransform InstTransform(Res.ImpactPoint);
+				InstMesh->AddInstance(InstTransform, true);
+			}
+		}
+	}
+
+	InstMesh->SetMobility(EComponentMobility::Static);
+}
+
+void ALandscapeSection::RemoveFoliage()
+{
+	InstMesh->ClearInstances();
+	FoliageGenerated = false;
+}
+
+bool ALandscapeSection::IsOriginCoord(const FVector& PlayerLocation)
 {
 	return mLandscapeGen->GetCurrentGridPoint(PlayerLocation) == mTerrainCoords;
 }
 
-void UTerrainSection::InitialiseSection(ALandscapeGenerator* LandscapeGen , int SectionGridIndex, FIntPoint TerrainCoords, uint32 Seed, const FVector2D& SectionSize, const FIntPoint& ComponentsPerAxis, float fNoiseScale, float fHeightScale, float fLacunarity, float fPersistance, int Octaves)
+void ALandscapeSection::InitialiseSection(ALandscapeGenerator* LandscapeGen, FIntPoint TerrainCoords, uint32 Seed, const FVector2D& SectionSize, const FIntPoint& ComponentsPerAxis, float fNoiseScale, float fHeightScale, float fLacunarity, float fPersistance, int Octaves)
 {
 	mLandscapeGen = LandscapeGen;
-	mSectionIndex = SectionGridIndex;
 	mTerrainCoords = TerrainCoords;
 
 	bMeshGenerated = false;
@@ -53,16 +116,25 @@ void UTerrainSection::InitialiseSection(ALandscapeGenerator* LandscapeGen , int 
 	mPersistance = fPersistance;
 	mOctaves = Octaves;
 
+	UStaticMesh* treeMesh = mLandscapeGen->TreeMesh;
+	if (treeMesh)
+		InstMesh->SetStaticMesh(treeMesh);
+
+	InstMesh->SetMobility(EComponentMobility::Static);
+
 	Thread = new FGeneratorThread(this);
 	Thread->StartOperation(THREAD_OPERATION::GEN_LANDSCAPE);
+
 }
 
-void UTerrainSection::GenerateSectionMeshData()
+void ALandscapeSection::GenerateSectionMeshData()
 {
 	FVector MeshOrigin = FVector(CalculateWorldCoordinatesFromTerrainCoords(mTerrainCoords, mSectionSize), 0.0);
 	mMeshOrigin = MeshOrigin;
 	float rowVertDist = mSectionSize.Y / mComponentsPerAxis.Y;
 	float columnVertDist = mSectionSize.X / mComponentsPerAxis.X;
+
+
 
 	FIntPoint OverallComponents = mComponentsPerAxis + FIntPoint(1, 1);
 
@@ -74,8 +146,10 @@ void UTerrainSection::GenerateSectionMeshData()
 		{
 			//Generate vertex
 			float xPos = columnVertDist * i;
-			mSectionVertices.Add(CalculateVertexPosition(xPos, yPos));
+			FVector VertexPos = CalculateVertexPosition(xPos, yPos);
+			mSectionVertices.Add(VertexPos);
 
+			//Generate Indices
 			if ((i < OverallComponents.X - 1) && (j < OverallComponents.Y - 1))
 			{
 				//Generate Triangle Index
@@ -200,12 +274,13 @@ void UTerrainSection::GenerateSectionMeshData()
 		mSectionNormals[i].Normalize();
 
 	Points = NewObject<UDiskSampler>(GetTransientPackage(), UDiskSampler::StaticClass());
-	Points->GeneratePoints(mSectionSize.X, mSectionSize.Y, 500, 15);
+	Points->GeneratePoints(mSectionSize.X, mSectionSize.Y, 1100, 10);
 
 	bMeshGenerated = true;
+	PointsGenerated = true;
 }
 
-bool UTerrainSection::GenerateLODData(int LOD)
+bool ALandscapeSection::GenerateLODData(int LOD)
 {
 	GeneratingLOD = true;
 
@@ -224,7 +299,7 @@ bool UTerrainSection::GenerateLODData(int LOD)
 	{
 		for (int i = 0; i < ActualComponents.X; i++)
 		{
-			int vertindex = CalcIndexFromGridPos(mComponentsPerAxis + FIntPoint(1,1), i, j);
+			int vertindex = CalcIndexFromGridPos(mComponentsPerAxis + FIntPoint(1, 1), i, j);
 			mSectionLODVertices.Add(mSectionVertices[vertindex * Skip]);
 			mSectionLODNormals.Add(mSectionNormals[vertindex * Skip]);
 
@@ -252,14 +327,11 @@ bool UTerrainSection::GenerateLODData(int LOD)
 	return true;
 }
 
-void UTerrainSection::UpdateTerrainSection(int LOD)
+void ALandscapeSection::UpdateTerrainSection(int LOD)
 {
-	if (mLandscapeGen->mesh && bMeshGenerated)
+	if (mesh && bMeshGenerated)
 	{
-		if (LOD > 4)
-			return;
-
-		if (LODLevel == LOD)
+		if (LOD > 4 || LODLevel == LOD)
 			return;
 
 		if (LOD > 0 && GenLOD != LOD)
@@ -269,26 +341,34 @@ void UTerrainSection::UpdateTerrainSection(int LOD)
 			Thread->StartOperation(GEN_LOD);
 			return;
 		}
-			
+
 		if (GeneratingLOD == false)
 		{
 			LODLevel = LOD;
 			if (LODLevel > 0)
-				mLandscapeGen->mesh->CreateMeshSection_LinearColor(mSectionIndex, mSectionLODVertices, mSectionLODIndices, mSectionLODNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), false);
+			{
+				mesh->CreateMeshSection_LinearColor(0, mSectionLODVertices, mSectionLODIndices, mSectionLODNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), false);
+				if (FoliageGenerated)
+					RemoveFoliage();
+			}
 			else
-				mLandscapeGen->mesh->CreateMeshSection_LinearColor(mSectionIndex, mSectionVertices, mSectionIndices, mSectionNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), true);
+			{
+				mesh->CreateMeshSection_LinearColor(0, mSectionVertices, mSectionIndices, mSectionNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), mLandscapeGen->AddCollision);
+				if (!FoliageGenerated)
+					GenerateFoliage();
+			}
 		}
-		
+
 		if (mLandscapeGen->GetMaterial())
-			mLandscapeGen->mesh->SetMaterial(mSectionIndex, mLandscapeGen->GetMaterial());
+			mesh->SetMaterial(0, mLandscapeGen->GetMaterial());
 
 	}
 }
 
-void UTerrainSection::RemoveSection()
+void ALandscapeSection::RemoveSection()
 {
-	if(mLandscapeGen->mesh)
-		mLandscapeGen->mesh->ClearMeshSection(mSectionIndex);
+	if (mesh)
+		mesh->ClearMeshSection(0);
 
 	mLandscapeGen = nullptr;
 	if (Points)
@@ -308,7 +388,7 @@ void UTerrainSection::RemoveSection()
 MultiThreader
 *******************************************/
 
-FGeneratorThread::FGeneratorThread(UTerrainSection* Section)
+FGeneratorThread::FGeneratorThread(ALandscapeSection* Section)
 {
 	Thread = nullptr;
 	bRunThread = true;
@@ -319,7 +399,7 @@ FGeneratorThread::FGeneratorThread(UTerrainSection* Section)
 bool FGeneratorThread::StartOperation(THREAD_OPERATION operation)
 {
 	mOperation = operation;
-	
+
 	Thread = FRunnableThread::Create(this, TEXT("GeneratorThread"));
 	return true;
 }
@@ -342,14 +422,14 @@ uint32 FGeneratorThread::Run()
 {
 	switch (mOperation)
 	{
-		case GEN_LANDSCAPE:
-			mSection->GenerateSectionMeshData();
-			break;
-		case GEN_LOD:
-			mSection->GenerateLODData(mSection->GenLOD);
-			break;
+	case GEN_LANDSCAPE:
+		mSection->GenerateSectionMeshData();
+		break;
+	case GEN_LOD:
+		mSection->GenerateLODData(mSection->GenLOD);
+		break;
 	}
-	
+
 	return 1;
 }
 
