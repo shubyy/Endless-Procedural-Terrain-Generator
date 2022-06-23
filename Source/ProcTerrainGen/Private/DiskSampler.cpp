@@ -4,8 +4,9 @@
 #include "DiskSampler.h"
 
 
-void UDiskSampler::GeneratePoints(float width, float height, float radius, int k)
+void UDiskSampler::GeneratePoints(int64 seed, float width, float height, float radius, int k)
 {
+	FMath::RandInit(seed);
 	PointList.Empty();
 	ActiveList.Empty();
 

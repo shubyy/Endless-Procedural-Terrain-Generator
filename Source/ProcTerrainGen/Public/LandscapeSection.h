@@ -4,13 +4,15 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Providers/RuntimeMeshProviderCollision.h"
 #include "LandscapeSection.generated.h"
 
 class ALandscapeGenerator;
 class UDiskSampler;
 class FGeneratorThread;
 class FRunnableThread;
-class UProceduralMeshComponent;
+class URuntimeMeshComponent;
+class URuntimeMeshProviderStatic;
 class UHierarchicalInstancedStaticMeshComponent;
 class UStaticMesh;
 
@@ -22,12 +24,19 @@ class PROCTERRAINGEN_API ALandscapeSection : public AActor
 public:	
 	// Sets default values for this actor's properties
 	ALandscapeSection();
+
 	void InitialiseSection(ALandscapeGenerator* LandscapeGen, FIntPoint TerrainCoords, uint32 Seed, const FVector2D& SectionSize, const FIntPoint& ComponentsPerAxis, float fNoiseScale, float fHeightScale, float fLacunarity, float fPersistance, int Octaves);
+	
 	bool IsOriginCoord(const FVector& PlayerLocation);
 	bool GenerateLODData(int LOD);
-	FVector CalculateVertexPosition(float xPos, float yPos);
+
+	FVector3f CalculateVertexPosition(float xPos, float yPos);
+
+	bool GenerateCollisionFromLOD(int LOD);
+
 	void GenerateFoliage();
 	void RemoveFoliage();
+
 	void GenerateSectionMeshData();
 	void UpdateTerrainSection(int LOD);
 	void RemoveSection();
@@ -36,8 +45,11 @@ public:
 	bool PointsGenerated;
 	bool bMeshGenerated;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Landscape Mesh")
-	UProceduralMeshComponent* mesh;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Landscape Mesh")
+	URuntimeMeshComponent* mesh;
+
+	URuntimeMeshProviderStatic* StaticProvider;
+	URuntimeMeshProviderCollision* CollisionProvider;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Landscape Mesh")
 	UHierarchicalInstancedStaticMeshComponent* InstMesh;
@@ -50,6 +62,8 @@ public:
 	int LODLevel;
 	int GenLOD;
 	bool GeneratingLOD;
+	bool GeneratingCollision;
+	bool CollisionGenerated;
 
 	//Section Data
 	FVector mMeshOrigin;
@@ -59,16 +73,21 @@ public:
 	float mLacunarity;
 	float mPersistance;
 	int mOctaves;
+	int GlobalSeed;
 
-	TArray<FVector> mSectionVertices;
+	FRuntimeMeshCollisionData CollisionData;
+
+	TArray<FVector3f> mSectionVertices;
 	TArray<int32> mSectionIndices;
-	TArray<FVector> mSectionNormals;
+	TArray<FVector3f> mSectionNormals;
 	FVector2D mSectionSize;
 	ALandscapeGenerator* mLandscapeGen;
 
-	TArray<FVector> mSectionLODVertices;
+	TArray<FVector3f> mSectionLODVertices;
 	TArray<int32> mSectionLODIndices;
-	TArray<FVector> mSectionLODNormals;
+	TArray<FVector3f> mSectionLODNormals;
+
+	TArray<FVector3f> mCollisionVertices;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Points")
 	UDiskSampler* Points;
@@ -83,7 +102,7 @@ public:
 enum THREAD_OPERATION {
 	GEN_LANDSCAPE,
 	GEN_LOD,
-	GEN_POINTDISC,
+	GEN_COLLISION
 };
 
 class FGeneratorThread : public FRunnable

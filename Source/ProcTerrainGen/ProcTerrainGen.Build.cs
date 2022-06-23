@@ -10,6 +10,7 @@ public class ProcTerrainGen : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "ProceduralMeshComponent" });
 		PublicDependencyModuleNames.Add("SimplexNoise");
+		PublicDependencyModuleNames.Add("RuntimeMeshComponent");
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 

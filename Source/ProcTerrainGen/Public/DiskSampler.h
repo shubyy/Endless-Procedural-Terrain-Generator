@@ -33,6 +33,6 @@ public:
 	TArray<FVector2D> PointList;
 
 	UFUNCTION(BlueprintCallable, Category="Disk Sampler")
-	void GeneratePoints(float width, float height, float radius, int k);
+	void GeneratePoints(int64 seed, float width, float height, float radius, int k);
 
 };

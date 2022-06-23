@@ -5,7 +5,8 @@
 #include "LandscapeGenerator.h"
 #include "SimplexNoise/Public/SimplexNoiseBPLibrary.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
-#include "KismetProceduralMeshLibrary.h"
+#include "Components/RuntimeMeshComponentStatic.h"
+#include "Providers/RuntimeMeshProviderStatic.h"
 #include "DiskSampler.h"
 
 #define LOCTEXT_NAMESPACE "Section"
@@ -19,23 +20,38 @@ ALandscapeSection::ALandscapeSection()
 	FoliageGenerated = false;
 	bMeshGenerated = false;
 	PointsGenerated = false;
+	CollisionGenerated = false;
+	GeneratingCollision = false;
 	Points = nullptr;
 
-	mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("LandscapeMesh"));
+	mesh = CreateDefaultSubobject<URuntimeMeshComponent>(TEXT("LandscapeMesh"));
 	RootComponent = mesh;
 	mesh->SetMobility(EComponentMobility::Static);
-	mesh->bUseAsyncCooking = false;
 
 	InstMesh = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("HierarchicalInstancedStaticMeshComponent"));
 	InstMesh->SetCollisionProfileName("BlockAllDynamic");
 	InstMesh->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepWorldTransform);
+	InstMesh->SetCollisionEnabled(ECollisionEnabled::PhysicsOnly);
 }
 
 // Called when the game starts or when spawned
 void ALandscapeSection::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
+	StaticProvider = NewObject<URuntimeMeshProviderStatic>(this, TEXT("StaticProvider"));
+	CollisionProvider = NewObject<URuntimeMeshProviderCollision>(this, TEXT("CollisionProvider"));
+
+	CollisionProvider->SetChildProvider(StaticProvider);
+	CollisionProvider->SetRenderableSectionAffectsCollision(0, true);
+
+	FRuntimeMeshCollisionSettings Settings;
+	Settings.bUseAsyncCooking = true;
+	Settings.bUseComplexAsSimple = true;
+	Settings.CookingMode = ERuntimeMeshCollisionCookingMode::CookingPerformance;
+	CollisionProvider->SetCollisionSettings(Settings);
+
+	mesh->Initialize(CollisionProvider);
 }
 
 int CalcIndexFromGridPos(const FIntPoint& gridSize, int x, int y)
@@ -43,13 +59,13 @@ int CalcIndexFromGridPos(const FIntPoint& gridSize, int x, int y)
 	return x + y * gridSize.X;
 }
 
-FVector ALandscapeSection::CalculateVertexPosition(float xPos, float yPos)
+FVector3f ALandscapeSection::CalculateVertexPosition(float xPos, float yPos)
 {
-	FVector vertPosition(xPos, yPos, 0);
-	vertPosition += mMeshOrigin;
+	FVector3f vertPosition(xPos, yPos, 0.0f);
+	vertPosition += FVector3f(mMeshOrigin);
 
 	float RawNoiseValue = USimplexNoiseBPLibrary::GetSimplexNoise2D_EX(vertPosition.X * mNoiseScale, vertPosition.Y * mNoiseScale, mLacunarity, mPersistance, mOctaves, 1.0f, true);
-	vertPosition += FVector(0, 0, mLandscapeGen->ApplyTerrainHeightMultiplier(RawNoiseValue) * mHeightScale);
+	vertPosition += FVector3f(0.0, 0.0, mLandscapeGen->ApplyTerrainHeightMultiplier(RawNoiseValue) * mHeightScale);
 
 	return vertPosition;
 }
@@ -72,7 +88,7 @@ void ALandscapeSection::GenerateFoliage()
 	for (FVector2D Point : Points->PointList)
 	{
 		FVector Start = FVector(Point, mHeightScale + 3000.0f) + mMeshOrigin;
-		FVector End = FVector(Point, -3000) + mMeshOrigin;
+		FVector End = FVector(Point, -3000.0f) + mMeshOrigin;
 		
 		bool bHit = GetWorld()->LineTraceSingleByChannel(Res, Start, End, ECollisionChannel::ECC_Visibility, Params);
 		if (bHit)
@@ -115,6 +131,7 @@ void ALandscapeSection::InitialiseSection(ALandscapeGenerator* LandscapeGen, FIn
 	mLacunarity = fLacunarity;
 	mPersistance = fPersistance;
 	mOctaves = Octaves;
+	GlobalSeed = Seed;
 
 	UStaticMesh* treeMesh = mLandscapeGen->TreeMesh;
 	if (treeMesh)
@@ -134,8 +151,6 @@ void ALandscapeSection::GenerateSectionMeshData()
 	float rowVertDist = mSectionSize.Y / mComponentsPerAxis.Y;
 	float columnVertDist = mSectionSize.X / mComponentsPerAxis.X;
 
-
-
 	FIntPoint OverallComponents = mComponentsPerAxis + FIntPoint(1, 1);
 
 	//Generate Vertices
@@ -146,7 +161,7 @@ void ALandscapeSection::GenerateSectionMeshData()
 		{
 			//Generate vertex
 			float xPos = columnVertDist * i;
-			FVector VertexPos = CalculateVertexPosition(xPos, yPos);
+			FVector3f VertexPos = CalculateVertexPosition(xPos, yPos);
 			mSectionVertices.Add(VertexPos);
 
 			//Generate Indices
@@ -177,10 +192,10 @@ void ALandscapeSection::GenerateSectionMeshData()
 	{
 		for (int i = -1; i < OverallComponents.X; i++)
 		{
-			FVector vertex1;
-			FVector vertex2;
-			FVector vertex3;
-			FVector vertex4;
+			FVector3f vertex1;
+			FVector3f vertex2;
+			FVector3f vertex3;
+			FVector3f vertex4;
 
 			int index11 = CalcIndexFromGridPos(OverallComponents, i, j);
 			int index12 = CalcIndexFromGridPos(OverallComponents, i, j + 1);
@@ -207,13 +222,13 @@ void ALandscapeSection::GenerateSectionMeshData()
 				vertex4 = CalculateVertexPosition(xPos2, yPos1);
 			}
 
-			FVector dir1 = vertex2 - vertex1;
-			FVector dir2 = vertex3 - vertex1;
-			FVector normal1 = FVector::CrossProduct(dir2, dir1).GetSafeNormal();
+			FVector3f dir1 = vertex2 - vertex1;
+			FVector3f dir2 = vertex3 - vertex1;
+			FVector3f normal1 = FVector3f::CrossProduct(dir2, dir1).GetSafeNormal();
 
 			dir1 = vertex3 - vertex1;
 			dir2 = vertex4 - vertex1;
-			FVector normal2 = FVector::CrossProduct(dir2, dir1).GetSafeNormal();
+			FVector3f normal2 = FVector3f::CrossProduct(dir2, dir1).GetSafeNormal();
 
 			if (i == -1)
 			{
@@ -273,11 +288,50 @@ void ALandscapeSection::GenerateSectionMeshData()
 	for (int i = 0; i < mSectionNormals.Num(); i += 1)
 		mSectionNormals[i].Normalize();
 
-	Points = NewObject<UDiskSampler>(GetTransientPackage(), UDiskSampler::StaticClass());
-	Points->GeneratePoints(mSectionSize.X, mSectionSize.Y, 1100, 10);
-
 	bMeshGenerated = true;
+
+	Points = NewObject<UDiskSampler>(GetTransientPackage(), UDiskSampler::StaticClass());
+
+	int64 seed = (GlobalSeed % (mTerrainCoords.X == 0 ? 50 : mTerrainCoords.X)) + mTerrainCoords.Y;
+
+	Points->GeneratePoints(seed, mSectionSize.X, mSectionSize.Y, 1100, 10);
 	PointsGenerated = true;
+}
+
+bool ALandscapeSection::GenerateCollisionFromLOD(int LOD)
+{
+	if (!bMeshGenerated)
+		return false;
+
+	int Skip = FMath::Floor(FMath::Pow(2, LOD));
+
+	FIntPoint ActualComponents = mComponentsPerAxis / Skip + FIntPoint(1, 1);
+
+	for (int j = 0; j < ActualComponents.Y; j++)
+	{
+		for (int i = 0; i < ActualComponents.X; i++)
+		{
+			int vertindex = CalcIndexFromGridPos(mComponentsPerAxis + FIntPoint(1, 1), i, j);
+			CollisionData.Vertices.Add(mSectionVertices[vertindex * Skip]);
+
+			if ((i < ActualComponents.X - 1) && (j < ActualComponents.Y - 1))
+			{
+				int index11 = CalcIndexFromGridPos(ActualComponents, i, j);
+				int index12 = CalcIndexFromGridPos(ActualComponents, i, j + 1);
+				int index13 = CalcIndexFromGridPos(ActualComponents, i + 1, j + 1);
+
+				int index22 = CalcIndexFromGridPos(ActualComponents, i + 1, j + 1);
+				int index23 = CalcIndexFromGridPos(ActualComponents, i + 1, j);
+
+				CollisionData.Triangles.Add(index11, index12, index13);
+				CollisionData.Triangles.Add(index11, index22, index23);
+			}
+		}
+	}
+	
+	CollisionGenerated = true;
+	GeneratingCollision = false;
+	return true;
 }
 
 bool ALandscapeSection::GenerateLODData(int LOD)
@@ -329,7 +383,7 @@ bool ALandscapeSection::GenerateLODData(int LOD)
 
 void ALandscapeSection::UpdateTerrainSection(int LOD)
 {
-	if (mesh && bMeshGenerated)
+	if (mesh && bMeshGenerated && !GeneratingCollision)
 	{
 		if (LOD > 4 || LODLevel == LOD)
 			return;
@@ -342,18 +396,29 @@ void ALandscapeSection::UpdateTerrainSection(int LOD)
 			return;
 		}
 
-		if (GeneratingLOD == false)
+		if (!CollisionGenerated)
+		{
+			GeneratingCollision = true;
+			Thread->StartOperation(GEN_COLLISION);
+			return;
+		}
+
+		CollisionProvider->SetCollisionMesh(CollisionData);
+
+		if (!GeneratingLOD)
 		{
 			LODLevel = LOD;
 			if (LODLevel > 0)
 			{
-				mesh->CreateMeshSection_LinearColor(0, mSectionLODVertices, mSectionLODIndices, mSectionLODNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), false);
+				mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				StaticProvider->CreateSectionFromComponents(0, 0, 0, mSectionLODVertices, mSectionLODIndices, mSectionLODNormals, TArray<FVector2f>(), TArray<FColor>(), TArray<FRuntimeMeshTangent>(), ERuntimeMeshUpdateFrequency::Infrequent, false);
 				if (FoliageGenerated)
 					RemoveFoliage();
 			}
 			else
 			{
-				mesh->CreateMeshSection_LinearColor(0, mSectionVertices, mSectionIndices, mSectionNormals, TArray<FVector2D>(), TArray<FLinearColor>(), TArray<FProcMeshTangent>(), mLandscapeGen->AddCollision);
+				mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+				StaticProvider->CreateSectionFromComponents(0, 0, 0, mSectionVertices, mSectionIndices, mSectionNormals, TArray<FVector2f>(), TArray<FColor>(), TArray<FRuntimeMeshTangent>(), ERuntimeMeshUpdateFrequency::Infrequent, false);
 				if (!FoliageGenerated)
 					GenerateFoliage();
 			}
@@ -367,8 +432,8 @@ void ALandscapeSection::UpdateTerrainSection(int LOD)
 
 void ALandscapeSection::RemoveSection()
 {
-	if (mesh)
-		mesh->ClearMeshSection(0);
+	if (StaticProvider)
+		StaticProvider->ClearSection(0, 0);
 
 	mLandscapeGen = nullptr;
 	if (Points)
@@ -427,6 +492,9 @@ uint32 FGeneratorThread::Run()
 		break;
 	case GEN_LOD:
 		mSection->GenerateLODData(mSection->GenLOD);
+		break;
+	case GEN_COLLISION:
+		mSection->GenerateCollisionFromLOD(1);
 		break;
 	}
 

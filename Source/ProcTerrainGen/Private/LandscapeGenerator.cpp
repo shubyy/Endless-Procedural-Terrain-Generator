@@ -102,7 +102,7 @@ void ALandscapeGenerator::GenerateNewTerrainGrid()
 			int LODLevel = CalcLODLevelFromTerrainCoordDistance((Coord - CurrentGridCoord).Size());
 
 			//Spawn Actor
-			FVector Pos = FVector(CalculateWorldCoordinatesFromTerrainCoords(Coord, LandscapeSectionSize), 0);
+			FVector Pos = FVector(CalculateWorldCoordinatesFromTerrainCoords(Coord, LandscapeSectionSize), 0.0);
 			FActorSpawnParameters Params;
 			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 			ALandscapeSection* NewSection = GetWorld()->SpawnActor<ALandscapeSection>(ALandscapeSection::StaticClass(), FVector(0,0,0), FRotator::ZeroRotator, Params);
